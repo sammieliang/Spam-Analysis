@@ -1,0 +1,164 @@
+---
+title: "Spam Detection"
+author: "Sammie Liang"
+date: "June 26, 2017"
+output: html_document
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(cache=TRUE, autodep=TRUE, cache.comments=TRUE)
+```
+
+```{r}
+library(tm)
+library(caTools)
+library(rpart.plot)
+library(rpart)
+```
+
+Goal
+===
+
+- **Come up with an accurate prediction model of spam sms messages**
+
+Data Preparation
+===
+
+```{r}
+#Dataset taken from https://www.kaggle.com/uciml/sms-spam-collection-dataset
+sms = read.csv("spam.csv", stringsAsFactors=FALSE)
+summary(sms)
+```
+
+- We only need the variables v1 (spam/ham) and v2 (the actual sms message). The rest of the variable is just noise from reading the csv file. The v1 variable is separated as either "spam" or "ham", but I turned it into a binary of whether or not the sms message is spam to make it easier to handle. 
+
+```{r}
+names(sms) = c("Tag","Message")
+sms = sms[c("Tag","Message")]
+sms$Tag = as.factor(sms$Tag)
+for (i in 1:length(sms$Tag))
+{
+  if (sms$Tag[i] == "spam")
+  {
+    sms$Spam[i] = 1
+  }
+  else
+  {
+    sms$Spam[i] = 0
+  }
+}
+sms$Tag = NULL
+summary(sms)
+```
+
+- Next, since these are sms messages and it would inefficient to examine every word, I cleaned the data by converting everything to lowercase, removing punctuation and stop words, and only taking the stems of words. In addition, I took words that occurred in the text .5% of the time to get a reasonable number of words to work with. 
+
+```{r}
+corpusSms = Corpus(VectorSource(sms$Message))
+corpusSms = tm_map(corpusSms, tolower)
+corpusSms = tm_map(corpusSms, removePunctuation)
+corpusSms = tm_map(corpusSms, removeWords, stopwords("english"))
+
+corpusSms = tm_map(corpusSms, stemDocument)
+dtmSms = DocumentTermMatrix(corpusSms)
+spdtm = removeSparseTerms(dtmSms, 0.995)
+smsNew = as.data.frame(as.matrix(spdtm))
+```
+
+Creating Predictive Models
+===
+
+- I will split the data set into a 70/30 training and test set respectively. 
+
+```{r}
+colnames(smsNew) = make.names(colnames(smsNew),unique=TRUE)
+smsNew$Spam = sms$Spam
+smsNew$Spam = as.factor(smsNew$Spam)
+
+set.seed(123)
+spl = sample.split(smsNew$Spam, 0.7)
+smsTrain = subset(smsNew, spl==TRUE)
+smsTest = subset(smsNew, spl==FALSE)
+```
+
+
+**Gauging Baseline Accuracy**
+
+```{r}
+table(smsTrain$Spam)
+table(smsTest$Spam)
+table(sms$Spam)
+
+trainAccuracy.baseline = sum(smsTrain$Spam == 0) / (length(smsTrain$Spam))
+testAccuracy.baseline = sum(smsTest$Spam == 0) / (length(smsTest$Spam))
+smsAccuracy = sum(sms$Spam == 0) / (length(sms$Spam))
+
+trainAccuracy.baseline
+testAccuracy.baseline
+smsAccuracy
+```
+
+- The base line accuracy is almost 86.6% for both the training and testing set, given that a large portion of the whole data set is not spam. 
+
+- An observation is that since the base line accuracy for our test set is similar to the base line accuracy of the whole sms set, the steps took to clean the messages to make them easier to handle did not intrude on the data. 
+
+**Building Models**
+
+- Given that the we are predicting a binary variable, I have decided to compare the predictive power of a logistic regression model and a classification and regression tree model. 
+
+```{r}
+sms.log = glm(Spam~., data=smsTrain,family=binomial)
+smsTrainPred.log = predict(sms.log, type="response")
+
+sms.CART = rpart(Spam~., data=smsTrain, method="class")
+smsTrainPred.CART = predict(sms.CART)[,2]
+```
+
+```{r}
+prp(sms.CART)
+```
+
+**Evaluating on the Training Set**
+
+```{r}
+table(smsTrain$Spam, smsTrainPred.log > 0.5)
+table(smsTrain$Spam, smsTrainPred.CART > 0.5)
+```
+
+```{r}
+trainAccuracy.log = (3373 + 510) / nrow(smsTrain)
+trainAccuracy.CART = (3359 + 353) / nrow(smsTrain)
+
+trainAccuracy.log
+trainAccuracy.CART
+```
+
+- The logistic regression model had a 99.5% accuracy on the training set, while the CART model had a 95.2% accuracy. 
+
+**Evaluating on the Testing Set**
+
+```{r}
+smsTestPred.log = predict(sms.log, newdata=smsTest, type="response")
+
+smsTestPred.CART = predict(sms.CART, newdata=smsTest)[,2]
+
+table(smsTest$Spam, smsTestPred.log > 0.5)
+table(smsTest$Spam, smsTestPred.CART > 0.5)
+```
+
+```{r}
+testAccuracy.log = (1409 + 193) / nrow(smsTest)
+testAccuracy.CART = (1438 + 140) / nrow(smsTest)
+
+testAccuracy.log 
+testAccuracy.CART
+```
+
+- The logistic regression model had a 95.9% accuracy on the training set, while the CART model had a 94.4% accuracy.
+
+Conclusions
+===
+
+- It is worth it to note that while the logistic regression model had an almost perfect accuracy on the training set, it did significantly worse on the testing set, compared to the difference between the CART model's accuracy on the training versus the testing set. This seems to be a result of overfitting on the logistic model given that when the model was created, an error of "fitted probabilities numerically 0 or 1 occurred". 
+
+- As a result, despite the logistic regression model have a stronger predictive power than the classification and regression model, it was not as consistent as the CART. 
